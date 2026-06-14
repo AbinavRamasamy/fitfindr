@@ -18,6 +18,7 @@ Usage (once implemented):
     print(result["error"])   # None on success
 """
 
+import re
 from tools import search_listings, suggest_outfit, create_fit_card
 
 
@@ -46,6 +47,40 @@ def _new_session(query: str, wardrobe: dict) -> dict:
 
 
 # ── planning loop ─────────────────────────────────────────────────────────────
+
+def _parse_query(query: str) -> dict:
+    """
+    Parse user query to extract description, size, and max_price.
+    Uses regex to find price and size patterns, remainder is description.
+    """
+    description = query
+    size = None
+    max_price = None
+
+    # Extract price: "under $30", "under 30", "$30", etc.
+    price_match = re.search(r'(?:under|up to)?[:\s]*\$?(\d+(?:\.\d{2})?)', query, re.IGNORECASE)
+    if price_match:
+        max_price = float(price_match.group(1))
+        description = re.sub(r'(?:under|up to)?[:\s]*\$?(\d+(?:\.\d{2})?)', '', description, flags=re.IGNORECASE)
+
+    # Extract size: "size M", "size S/M", "M size", etc.
+    size_match = re.search(r'(?:size|sz)?[\s]*([\w/]+?)(?:\s|,|$)', query, re.IGNORECASE)
+    if size_match:
+        size_candidate = size_match.group(1).strip()
+        # Only extract if it looks like a size (short, contains letters/numbers, not full words)
+        if len(size_candidate) <= 5 and re.match(r'^[A-Z0-9/]+$', size_candidate.upper()):
+            size = size_candidate
+            description = re.sub(r'(?:size|sz)?[\s]*' + re.escape(size_candidate), '', description, flags=re.IGNORECASE)
+
+    # Clean up description
+    description = description.strip().strip(",").strip()
+
+    return {
+        "description": description,
+        "size": size,
+        "max_price": max_price,
+    }
+
 
 def run_agent(query: str, wardrobe: dict) -> dict:
     """
@@ -92,9 +127,41 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     Before writing code, complete the Planning Loop and State Management sections
     of planning.md — your implementation should match what you described there.
     """
-    # TODO: implement the planning loop
+    # Step 1: Initialize session
     session = _new_session(query, wardrobe)
-    session["error"] = "Planning loop not yet implemented."
+
+    # Step 2: Parse query
+    session["parsed"] = _parse_query(query)
+
+    # Step 3: Call search_listings
+    session["search_results"] = search_listings(
+        description=session["parsed"]["description"],
+        size=session["parsed"]["size"],
+        max_price=session["parsed"]["max_price"],
+    )
+
+    # Step 4 (Critical branch): Check if results empty
+    if not session["search_results"]:
+        desc = session["parsed"]["description"]
+        session["error"] = f"No {desc} found matching your criteria. Try adjusting size, price, or search term."
+        return session
+
+    # Step 5: Select top result
+    session["selected_item"] = session["search_results"][0]
+
+    # Step 6: Call suggest_outfit
+    session["outfit_suggestion"] = suggest_outfit(
+        new_item=session["selected_item"],
+        wardrobe=session["wardrobe"],
+    )
+
+    # Step 7: Call create_fit_card
+    session["fit_card"] = create_fit_card(
+        outfit=session["outfit_suggestion"],
+        new_item=session["selected_item"],
+    )
+
+    # Step 8: Return session
     return session
 
 
